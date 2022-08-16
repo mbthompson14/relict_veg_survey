@@ -1,0 +1,241 @@
+---
+title: "veg_survey"
+author: "matthew"
+date: "8/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggmap)
+library(rstatix)
+library(plyr)
+library(ggcorrplot)
+register_google(key = "AIzaSyB9Vhff8KomBvyQIa3opz2rUE06uhTYqc8")
+`%!in%` = Negate(`%in%`)
+```
+
+## Quick look at vegetation survey data
+
+Load the data
+```{r load}
+data_og = read.csv("veg_survey_r.csv")
+
+data_og = data_og %>%
+  as_tibble() %>%
+  dplyr::rename("site" = "ï..site") %>%
+  select(-c(notes, id_notes))
+
+data_og
+```
+
+Frequency calculations
+```{r summarize}
+
+# sum observations across each row
+data = data_og %>%
+  dplyr::mutate(freq_sp = rowSums(across(c(X0,X5,X10,X15,X20,X25,X30,X35,X40,X45,X50,X55,X60,X65,X70,X75,X80,X85,X90,X95,X100,X105,X110,X115,X120,X125,X130,X135,X140,X145)))) %>%
+  select(-c(X0,X5,X10,X15,X20,X25,X30,X35,X40,X45,X50,X55,X60,X65,X70,X75,X80,X85,X90,X95,X100,X105,X110,X115,X120,X125,X130,X135,X140,X145))
+
+## Add rows for each species not observed at a transect
+
+# function to be applied to each transect
+add_zero_rows <- function(df, name_list) {
+  for (name in name_list) {
+    if (name %!in% df$species) {
+      df = add_row(df, site = df$site[1], date = df$date[1], transect = df$transect[1], 
+              direction = df$direction[1], species = name, freq_sp = 0)
+    }
+  }
+  return(df)
+}
+
+# get list of all species in data
+unique_names = unique(data$species)
+
+# apply function to each transect
+data_with_zeros = data %>%
+  arrange(site, direction, species) %>%
+  ddply(.(site, direction), add_zero_rows, name_list = unique_names)
+
+
+
+## Alternative method of adding zero rows
+# test = data %>%
+#   filter(site == "selja_grave") %>%
+#   filter(direction == "N")
+# 
+# 
+# for (i in unique_names) {
+#   match = F
+#   for (j in test$species) {
+#     if (i == j) {
+#       match = T
+#     }
+#   }
+#   if (match == F) {
+#     test = add_row(test, site = test$site[1], date = test$date[1], transect = test$transect[1], 
+#               direction = test$direction[1], species = i, freq_sp = 0)
+#   }
+# }
+
+# calculate frequency and relative frequency for each species at each transect
+data_trans = data_with_zeros %>%
+  group_by(site, direction) %>%
+  dplyr::mutate(freq_total_trans = sum(freq_sp)) %>%
+  dplyr::mutate(freq_rel_trans = freq_sp/freq_total_trans) %>%
+  ungroup()
+
+# average the above calculations for each site (just for plotting)
+data_site_avg = data_trans %>%
+  select(-c(transect, direction, date)) %>%
+  group_by(site, species) %>%
+  summarise_all(mean) %>%
+  ungroup()
+
+# calculate frequency and relative frequency for each species at each site
+data_site_raw = data_with_zeros %>%
+  select(-c(transect, direction, date)) %>%
+  group_by(site, species) %>%
+  summarise_all(sum) %>%
+  dplyr::mutate(freq_total_site = sum(freq_sp)) %>%
+  dplyr::mutate(freq_rel_site = freq_sp/freq_total_site) %>%
+  ungroup()
+```
+
+Plots by site: raw frequency & relative frequency
+```{r, fig.width = 20, fig.height = 10}
+
+data_site_raw %>%
+  #filter(species == "trifolium_repens") %>%
+  ggplot() +
+  geom_col(aes(x = species, y = freq_sp)) +
+  facet_wrap(~ site, nrow = 3) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), title = element_text(size = 15)) +
+  labs(y = "Raw Frequency", x = "Species")
+
+data_site_raw %>%
+  #filter(species == "trifolium_repens") %>%
+  ggplot() +
+  geom_col(aes(x = species, y = freq_rel_site)) +
+  facet_wrap(~ site, nrow = 3) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), title = element_text(size = 15)) +
+  labs(y = "Relative Frequency", x = "Species")
+
+```
+
+Plots by site: average frequency (averaged over the transects)
+```{r, fig.width = 20, fig.height = 10}
+
+data_site_avg %>%
+  #filter(species == "trifolium_repens") %>%
+  ggplot() +
+  geom_col(aes(x = species, y = freq_sp)) +
+  facet_wrap(~ site, nrow = 3) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), title = element_text(size = 15)) +
+  labs(y = "Average Frequency", x = "Species")
+
+data_site_avg %>%
+  #filter(species == "trifolium_repens") %>%
+  ggplot() +
+  geom_col(aes(x = species, y = freq_rel_trans)) +
+  facet_wrap(~ site, nrow = 3) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), title = element_text(size = 15)) +
+  labs(y = "Average Relative Frequency", x = "Species")
+
+```
+
+
+Statistical tests
+```{r}
+
+# let's just compare selja sites
+data_trans_selja = data_trans %>%
+  filter(site != "reins_kloster")
+
+# simple ttest to see if there's a difference in relative frequency 
+# for a given species between sites
+data_trans_selja %>%
+  filter(species == "trifolium_repens") %>%
+  t_test(freq_rel_trans ~ site)
+
+data_trans_selja %>%
+  filter(species == "trifolium_pratense") %>%
+  t_test(freq_rel_trans ~ site)
+
+# sig diff for T. repens, not T. pratense
+
+# need to think more about stat tests
+# could test all species at once--correct for multiple testing
+# also need to check assumptions
+
+```
+
+
+Correlation plot
+```{r correlation plot, fig.width=50, fig.height=50}
+
+# transform data
+data_transformed = data_og %>%
+  pivot_longer(cols = c(X0,X5,X10,X15,X20,X25,X30,X35,X40,X45,X50,X55,X60,X65,X70,
+                        X75,X80,X85,X90,X95,X100,X105,X110,X115,X120,X125,X130,X135,X140,X145), 
+               names_to = "distance", values_to = "obs") %>%
+  dplyr::mutate(distance = as.integer(sub('.', '', distance))) %>%
+  select(-c(site, date, transect, direction))%>%
+  group_by(species, distance) %>%
+  summarise_all(sum) %>%
+  pivot_wider(names_from = species, values_from = obs) %>%
+  ungroup() %>%
+  select(-c(distance))
+
+corr = round(cor(data_transformed),2)
+
+pmat = cor_pmat(data_transformed)
+
+ggcorrplot(corr, hc.order = T, lab = F) +
+  theme(axis.text.x = element_text(size = 20, angle = 90), axis.text.y = element_text(size = 20))
+
+```
+
+
+try to plot some maps
+
+1 degree ~ 111,139 meters
+150 meters ~ 0.00134966 degrees
+```{r, fig.width = 10, fig.height = 10}
+
+# lon = 5.296779
+# lat = 62.051255
+
+# t1 <- c(5.296779, 62.051255, 0, 0.00134966)
+# t2 <- c(5.296779, 62.051255, 0.25*pi, 0.00134966)
+# t3 <- c(5.296779, 62.051255, 0.5*pi, 0.00134966)
+# t4 <- c(5.296779, 62.051255, 0.75*pi, 0.00134966)
+# t5 <- c(5.296779, 62.051255, pi, 0.00134966)
+# t6 <- c(5.296779, 62.051255, (5/4)*pi, 0.00134966)
+# t7 <- c(5.296779, 62.051255, (3/2)*pi, 0.00134966)
+# t8 <- c(5.296779, 62.051255, (7/4)*pi, 0.00134966)
+# df <- as.data.frame(rbind(t1, t2, t3, t4, t5, t6, t7, t8))
+# colnames(df) <- c("lon", "lat", "angle", "radius")
+
+#angle = c(0, 0.25*pi, 0.5*pi, 0.75*pi, pi, (5/4)*pi, (3/2)*pi, (7/4)*pi)
+
+get_map(c(5.296779, 62.051255), zoom = 17, scale = 2, maptype = "satellite", color = "bw") %>% ggmap() +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = 0), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = 0.25*pi), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = 0.5*pi), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = 0.75*pi), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = pi), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = (5/4)*pi), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = (3/2)*pi), radius = 0.00134966, color = "red", size = 1) +
+  geom_spoke(aes(x=5.296779, y=62.051255, angle = (7/4)*pi), radius = 0.00134966, color = "red", size = 1)
+
+# qmap(c(5.296779, 62.051255), zoom = 17, maptype = "satellite") +
+#   geom_segment(aes(x = 5.296, y = 62.051, xend = 5.298, yend = 62.052))
+
+```
+
+
+
+
